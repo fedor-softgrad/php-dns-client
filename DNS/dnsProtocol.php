@@ -28,9 +28,19 @@ namespace Metaregistrar\DNS {
         protected $port;
         /**
          *
-         * @var float $timeout = 60
+         * @var float $connectiontimeout = 60
          */
-        protected $timeout;
+        protected $connectiontimeout;
+        /**
+         *
+         * @var float $readtimeoutsec = 60
+         */
+        protected $readtimeoutsec;
+        /**
+         *
+         * @var float $readtimeoutusec = 0
+         */
+        protected $readtimeoutusec;
         /**
          *
          * @var boolean $udp = false;
@@ -42,7 +52,8 @@ namespace Metaregistrar\DNS {
          */
         protected $types;
 
-        const DEFAULT_TIMEOUT = 60;
+        const DEFAULT_CONNECTION_TIMEOUT = 60.0;
+        const DEFAULT_READ_TIMEOUT = 60.0;
 
         function __construct($logging = false)
         {
@@ -51,7 +62,8 @@ namespace Metaregistrar\DNS {
                 $this->enableLogging();
             }
             $this->port=53;
-            $this->timeout=self::DEFAULT_TIMEOUT;
+            $this->setConnectionTimeout(self::DEFAULT_CONNECTION_TIMEOUT);
+            $this->setReadTimeout(self::DEFAULT_READ_TIMEOUT);
             $this->udp=false;
             $this->types=new dnsTypes();
             set_error_handler(array($this,'error_handler'));
@@ -99,7 +111,7 @@ namespace Metaregistrar\DNS {
             {
                 $host=$this->server;
             }
-            if (!$socket=@fsockopen($host,$this->port,$errno,$errstr,$this->timeout))
+            if (!$socket=@fsockopen($host,$this->port,$errno,$errstr,$this->connectiontimeout))
             {
                 throw new dnsException("Failed to open socket to ".$host);
             }
@@ -164,10 +176,21 @@ namespace Metaregistrar\DNS {
                     fclose($socket);
                     throw new dnsException("Failed to write question to socket");
                 }
-                if (!$this->rawbuffer=fread($socket,4096)) // read until the end with UDP
+
+                stream_set_blocking($socket, true); // set blocking mode to make fread wait for data to become available
+                stream_set_timeout($socket, $this->readtimeoutsec, $this->readtimeoutusec); // set read timeout
+
+                $this->rawbuffer=fread($socket,4096);
+                $info = stream_get_meta_data($socket);
+                if ($info['timed_out'])
                 {
                     fclose($socket);
-                    throw new dnsException("Failed to write read data buffer");
+                    throw new dnsException("Connection timed out while read data buffer");
+                }
+                if (!$this->rawbuffer) // read until the end with UDP
+                {
+                    fclose($socket);
+                    throw new dnsException("Failed to read data buffer");
                 }
             }
             else // TCP method
@@ -182,14 +205,32 @@ namespace Metaregistrar\DNS {
                     fclose($socket);
                     throw new dnsException("Failed to write question to TCP socket");
                 }
-                if (!$returnsize=fread($socket,2))
+
+                stream_set_blocking($socket, true); // set blocking mode to make fread wait for data to become available
+                stream_set_timeout($socket, $this->readtimeoutsec, $this->readtimeoutusec); // set read timeout
+
+                $returnsize=fread($socket,2);
+                $info = stream_get_meta_data($socket);
+                if ($info['timed_out'])
+                {
+                    fclose($socket);
+                    throw new dnsException("Connection timed out");
+                }
+                if (!$returnsize)
                 {
                     fclose($socket);
                 }
                 $tmplen=unpack("nlength",$returnsize);
                 $datasize=$tmplen['length'];
                 $this->writeLog("TCP Stream Length Limit ".$datasize);
-                if (!$this->rawbuffer=fread($socket,$datasize))
+                $this->rawbuffer=fread($socket,$datasize);
+                $info = stream_get_meta_data($socket);
+                if ($info['timed_out'])
+                {
+                    fclose($socket);
+                    throw new dnsException("Connection timed out while read data buffer");
+                }
+                if (!$this->rawbuffer)
                 {
                     fclose($socket);
                     throw new dnsException("Failed to read data buffer");
@@ -272,18 +313,41 @@ namespace Metaregistrar\DNS {
             return $this->server;
         }
 
-        public function setTimeout($timeout = self::DEFAULT_TIMEOUT)
+        /**
+         * @param float $timeout - the integer part of number means seconds whereas fractional part of the number means microseconds
+         * @throws dnsException
+         */
+        public function setConnectionTimeout($timeout = self::DEFAULT_CONNECTION_TIMEOUT)
         {
             if (!$new_timeout = floatval($timeout) || $timeout < 0)
             {
-                throw new dnsException("Incorrect timeout value: <" . $timeout . ">. Timeout must be positive number.");
+                throw new dnsException("Incorrect connection timeout value: <" . $timeout . ">. Timeout must be positive number.");
             }
-            $this->timeout = $new_timeout;
+            $this->connectiontimeout = $new_timeout;
         }
 
-        public function getTimeout()
+        public function getConnectionTimeout()
         {
-            return $this->timeout;
+            return $this->connectiontimeout;
+        }
+
+        /**
+         * @param float $timeout - the integer part of number means seconds whereas fractional part of the number means microseconds
+         * @throws dnsException
+         */
+        public function setReadTimeout($timeout = self::DEFAULT_READ_TIMEOUT)
+        {
+            if (!$new_timeout = floatval($timeout) || $timeout < 0)
+            {
+                throw new dnsException("Incorrect read timeout value: <" . $timeout . ">. Timeout must be positive number.");
+            }
+            $this->readtimeoutsec = (int)floor($new_timeout); // get seconds
+            $this->readtimeoutusec = (int)round(($new_timeout - $this->readtimeoutsec) * 1000000); // get microseconds
+        }
+
+        public function getReadTimeout()
+        {
+            return $this->readtimeoutsec + $this->readtimeoutusec / 1000;
         }
 
         public function setPort($port)
