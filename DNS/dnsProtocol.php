@@ -223,7 +223,7 @@ namespace Metaregistrar\DNS {
                 $tmplen=unpack("nlength",$returnsize);
                 $datasize=$tmplen['length'];
                 $this->writeLog("TCP Stream Length Limit ".$datasize);
-                $this->rawbuffer=fread($socket,$datasize);
+                $this->rawbuffer = fread($socket,$datasize);
                 $info = stream_get_meta_data($socket);
                 if ($info['timed_out'])
                 {
@@ -347,7 +347,7 @@ namespace Metaregistrar\DNS {
 
         public function getReadTimeout()
         {
-            return $this->readtimeoutsec + $this->readtimeoutusec / 1000;
+            return $this->readtimeoutsec + $this->readtimeoutusec / 1000000;
         }
 
         public function setPort($port)
